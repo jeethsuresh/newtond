@@ -126,6 +126,10 @@ func TestGravitasLoginAndRevokedAgent(t *testing.T) {
 		return w
 	}
 	call(httptest.NewRequest("GET", "/api/v1/query", nil), 401)
+	landing := call(httptest.NewRequest("GET", "/", nil), 200)
+	if landing.Header().Get("Referrer-Policy") != "same-origin" {
+		t.Fatal("query page must support browser form Origin validation")
+	}
 	start := call(httptest.NewRequest("GET", "/auth/gravitas/start", nil), 303)
 	location, err := url.Parse(start.Header().Get("Location"))
 	if err != nil || len(start.Result().Cookies()) != 1 {
