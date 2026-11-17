@@ -51,6 +51,9 @@ func Handler(store *Store, auth *Auth) http.Handler {
 	})
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		// The query page has same-origin POST forms. A no-referrer document
+		// can cause browsers to serialize the form's Origin as null.
+		w.Header().Set("Referrer-Policy", "same-origin")
 		if _, err := auth.authorize(r, false); err != nil {
 			if errors.Is(err, errUnauthenticated) {
 				_ = page.Execute(w, pageData{})
