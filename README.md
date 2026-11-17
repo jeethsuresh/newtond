@@ -1,35 +1,39 @@
 # newtonD
 
-<img src="newton.jpg"  width=252px height=336px >
+newtonD records typed, parameterized logs over UDP. The statement text is the metric name. Search recent events by statement, service or request ID. Query older examples and daily occurrence counts through the web UI or read-only JSON API.
 
-## What is it?
-newtonD is (or rather, soon will be) a structured, leveled, multicast transport logger with parameterization and automatic metric generation capabilities. It contains both a clientside component (the structured, leveled logger) with transport capabilities to a serverside component. The serverside component can (or rather, will soon) aggregate logs as it ingests them, and spit out any aggregated logs to other servers; this allows the computational requirements of traditional observability to be balanced across the compute of the cluster that's being observed. 
+## Gravitas pilot
 
-newtonD will also eventually support metrics processing and just-in-time collation. In contrast to modern observability platforms, newtonD takes advantage of the fact that servers can function as aggregation relays, and allows each server to do the brunt of the heavy lifting - by declaring specific metrics and monitors in a yaml file (or an API that each server instance hits, I haven't decided yet) to denote namespaced log -> metric type bindings. 
+The public UI is at https://newtond.gravitas.cool. Sign in with Gravitas. In the UI, **Create 30-minute agent token** issues a newtonD read-only bearer token. An agent uses it in the `Authorization` header. The API revalidates the originating IAM session on every request, including agent queries. Keep the token out of logs and URLs.
 
+```text
+GET /api/v1/query?kind=events&service=river&request_id=<id>
+GET /api/v1/query?kind=samples&service=river&from=2026-11-01
+GET /api/v1/query?kind=counts&service=iam&message=Request&from=2026-11-01&to=2026-12-01
+```
 
-TL;DR: newtonD lets you keep your print statement debugging in your prod codebase, where it'll generate metrics that are aggregated at multiple levels to tell you exactly what's happening in your system with zero effort and minimal observability prep work/configuration. 
+The API supports `service`, a case-insensitive statement substring in `message`, and an exclusive `to`. Use UTC dates for daily counts. The default result limit is 100 and the maximum is 500. A request timeline is ordered by event time. `/healthz` is anonymous and returns database readiness only.
 
-## Usage
-Use `go run main.go server` to start the server, and then `go run main.go` for the client (which will send random logs over)
+## Ingestion and retention
 
+The Go `log.NewUDPSender` sends bounded, best-effort datagrams. Version 1 uses a lower-case hex HMAC-SHA256, newline, and one JSON event. Each service has its own key. The collector accepts signed scalar parameters and stores their types separately from their values. IDs are deduplicated before counts change. Only operational metadata approved for pilot users should be emitted. Do not log credentials, query strings, request bodies or personal data.
 
-In bullets: 
+Full events are retained for at least an hour. Transitions use complete UTC buckets, so a newer tier can briefly cover additional time. The collector keeps one example per statement in hourly, daily and weekly buckets through approximately 24 hours, one month and one year. Hourly and daily samples include finer count bins. The permanent daily counts supply weekly breakdowns. Counts describe events received and deduplicated before expiry. UDP can drop packets.
 
-- Leveled & structured Logging, works as you'd expect; JSON and key-value string available with || separator
-- All logs, regardless of level, have their parameters converted into metric-form and chucked to the server (TODO: this should only happen for specific transports, such as the socket transport)
-- The server works with bubbletea to expose a TUI so I don't have to write frontend code (TODO: make it work with wish so charts and metrics can be viewed directly from the terminal)
-- The server may act as a relay for other servers, pushing logs to one or more destinations once it's performed its own aggregations/transformations on them
-- Eventually, the server will shard and partition logs to make them indexable and searchable, and I'll find a good way to store time series data that doesn't involve a whole prometheus mess (since I can't replicate that across all servers)
-- Because servers are hierarchical, you can always look up servers on a) the host, b) the cluster, c) the region, and d) globally (assuming you've set up your forwarding that way) to get fast results without cruft
+## Run the receiver
 
+Run `go run . server` with the settings below. The previous terminal demo is available via `go run . tui`.
 
-Wishlist: 
-- UX, could always be better - gotta figure out how wish works with ssh sessions too :( intent is for multiple sessions to share the same server instance with different views of the same data
-- Breakpoint logging: mostly a UI problem I think
-- Hard monitors (configured and saved) and soft monitors (JIT from ingested metrics, good for exploring bottlenecks): how to do this properly without mangling my data flow?
-- Heuristics processing; need to find a way to do that at multiple server levels, without having to invent a DSL
-- Configuration management & live tweaking: need to build that "super simple" feature flag library I keep describing when people bring up paying for LaunchDarkly
-- 
+| Setting | Meaning |
+| --- | --- |
+| `NEWTOND_UDP_KEYS` | JSON object mapping sending services to distinct keys of at least 32 bytes |
+| `NEWTOND_SESSION_KEY` | Unpadded base64url encoding of a 32-byte encryption key |
+| `NEWTOND_PUBLIC_ORIGIN` | External HTTPS origin, without a trailing slash |
+| `NEWTOND_ISSUER` | Trusted IAM HTTPS origin, defaults to `https://gravitas.cool` |
+| `NEWTOND_DB` | SQLite database path, defaults to `./newtond.db` |
+| `NEWTOND_UDP` | UDP bind address or multicast group, defaults to `:5514` |
+| `NEWTOND_HTTP` | HTTP bind address behind HTTPS termination, defaults to `:8080` |
 
-newtonD was originally built on the afternoon of Jan 25th, 2025 at my monthly household hackathon :) Newton, the lovable labradoodle, generously offered to be the project's mascot in exchange for some bits of popcorn. 
+The Gravitas deployment uses a retained PVC, immutable GHCR image, and private UDP Service. The UDP network policy admits only the River and IAM workloads. The public ingress routes the query UI and API over HTTPS. Run `go test ./...` to verify retention, typed reconstruction, authentication and revocation.
+
+newtonD started at a household hackathon in January 2025 and is named for Newton, the labradoodle.

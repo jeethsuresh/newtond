@@ -1,0 +1,6 @@
+.git
+.modules
+.build-cache
+.gravitas-runtime
+*.db*
+newton.jpg

@@ -1,0 +1,115 @@
+name: Gravitas
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: gravitas-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Run application checks
+        run: |
+          python3 - <<'PYTHON'
+          import json, subprocess
+          config = json.load(open('.gravitas/deploy.json'))
+          for argv in config.get('checks', []):
+              subprocess.run(argv, check=True)
+          PYTHON
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+      - name: Test in the production Docker toolchain
+        run: docker buildx build --target test .
+      - name: Build PR image without publishing credentials
+        if: github.event_name == 'pull_request'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        with:
+          context: .
+          push: false
+          platforms: linux/amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+  image:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: gravitas
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.image.outputs.digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish tested immutable image
+        id: image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ghcr.io/jeethsuresh/newtond-private:${{ github.sha }}
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+  deploy:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.GRAVITAS_DEPLOY_ENABLED == 'true'
+    needs: image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment:
+      name: gravitas
+      url: "https://newtond.gravitas.cool"
+    steps:
+      - name: Verify anonymous image pulls are denied
+        shell: bash
+        env:
+          IMAGE_DIGEST: ${{ needs.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          repo=jeethsuresh/newtond-private
+          token_response=$(curl -sS --max-time 20 "https://ghcr.io/token?service=ghcr.io&scope=repository:${repo}:pull")
+          token=$(jq -r '.token // empty' <<< "$token_response")
+          if [[ -n "$token" ]]; then
+            status=$(curl -sS --max-time 20 -o /dev/null -w '%{http_code}' \
+              -H "Authorization: Bearer $token" -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json' \
+              "https://ghcr.io/v2/${repo}/manifests/${IMAGE_DIGEST}")
+            [[ "$status" == 401 || "$status" == 403 ]]
+          else
+            jq -e '.errors[] | select(.code == "DENIED" or .code == "UNAUTHORIZED")' <<< "$token_response" >/dev/null
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Fetch pinned private deployment tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: jeethsuresh/gravitas-deploy
+          ref: 37f85a43ce1f7b018fc7e17ba0ed5cb6b5c7276b
+          path: .gravitas-runtime
+          ssh-key: ${{ secrets.GRAVITAS_TOOLING_SSH_KEY }}
+          persist-credentials: false
+      - name: Deploy and verify immutable release
+        uses: ./.gravitas-runtime
+        with:
+          config: .gravitas/deploy.json
+          image: ghcr.io/jeethsuresh/newtond-private@${{ needs.image.outputs.digest }}
+          kubeconfig: ${{ secrets.GRAVITAS_KUBECONFIG }}
