@@ -36,4 +36,6 @@ Run `go run . server` with the settings below. The previous terminal demo is ava
 
 The Gravitas deployment uses a retained PVC, immutable GHCR image, and private UDP Service. The UDP network policy admits only the River and IAM workloads. The public ingress routes the query UI and API over HTTPS. Run `go test ./...` to verify retention, typed reconstruction, authentication and revocation.
 
+For a release, dispatch the private Gravitas publisher with the full newtonD source commit. Then dispatch the newtonD Gravitas workflow on `main` with the reported image digest. Deployment verifies that anonymous image pulls fail before applying Kubernetes resources.
+
 newtonD started at a household hackathon in January 2025 and is named for Newton, the labradoodle.

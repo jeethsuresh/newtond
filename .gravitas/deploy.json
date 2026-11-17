@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "image_repository": "ghcr.io/jeethsuresh/newtond-private",
+  "image_repository": "ghcr.io/jeethsuresh/newtond-gravitas",
   "image_pull_secret": "gravitas-ghcr",
   "runtime_secret": "newtond-runtime",
   "cpu": "50m",
