@@ -1,46 +1,93 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"log/slog"
+	"net/http"
 	"os"
+	"os/signal"
+	"sync"
+	"syscall"
 	"time"
 
-	"github.com/google/uuid"
-	"github.com/jeethsuresh/newtond/log"
+	"github.com/jeethsuresh/newtond/internal/pilot"
 	"github.com/jeethsuresh/newtond/server"
-	"golang.org/x/exp/rand"
 )
 
 func main() {
-	//if the first arg is "server", start the server. Otherwise, call the startClient function
-	if len(os.Args) > 1 && os.Args[1] == "server" {
+	if len(os.Args) == 2 && os.Args[1] == "tui" {
 		server.StartServer()
-	} else {
-		startClient()
+		return
 	}
-
+	if err := run(); err != nil {
+		slog.Error("newtonD exited", "error", err)
+		os.Exit(1)
+	}
 }
 
-// TODO add metrics to this thing, and better representative load
-func startClient() {
-	//create a new logger with a SocketTransport and Info level
-	logger := log.NewLogger(log.Config{Level: log.Info})
-	//log a message
-	logger.Info(log.MsgFormat{Msg: "Test Message dont delete", Params: map[string]interface{}{"requestID": uuid.New().String()}})
-	logger.Info(log.MsgFormat{Msg: "Test Message dont delete", Params: map[string]interface{}{"requestID": uuid.New().String()}})
-	logger.Info(log.MsgFormat{Msg: "Test Message dont delete", Params: map[string]interface{}{"requestID": uuid.New().String()}})
-
-	messages := []string{
-		"Hello World",
-		"Goodbye World",
-		"Test Message dont delete",
-		"asdf",
-		"qwerzxcvqwerasdf",
+func env(name, fallback string) string {
+	if value := os.Getenv(name); value != "" {
+		return value
 	}
+	return fallback
+}
+
+func run() error {
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	keys, err := pilot.DecodeKeys(os.Getenv("NEWTOND_UDP_KEYS"))
+	if err != nil {
+		return err
+	}
+	auth, err := pilot.NewAuth(os.Getenv("NEWTOND_PUBLIC_ORIGIN"), env("NEWTOND_ISSUER", "https://gravitas.cool"),
+		os.Getenv("NEWTOND_SESSION_KEY"))
+	if err != nil {
+		return err
+	}
+	store, err := pilot.Open(env("NEWTOND_DB", "./newtond.db"))
+	if err != nil {
+		return fmt.Errorf("open SQLite: %w", err)
+	}
+	defer store.Close()
+	if err := store.Prune(ctx, time.Now()); err != nil {
+		return err
+	}
+	udp, err := pilot.ListenUDP(env("NEWTOND_UDP", ":5514"))
+	if err != nil {
+		return fmt.Errorf("open UDP listener: %w", err)
+	}
+	defer udp.Close()
+	web := &http.Server{Addr: env("NEWTOND_HTTP", ":8080"), Handler: pilot.Handler(store, auth),
+		ReadHeaderTimeout: 5 * time.Second, WriteTimeout: 12 * time.Second,
+		IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16384}
+	webErrors := make(chan error, 1)
+	var workers sync.WaitGroup
+	workers.Go(func() { pilot.Receive(ctx, udp, store, keys) })
+	go func() { webErrors <- web.ListenAndServe() }()
+	slog.Info("newtonD listeners ready", "http", web.Addr, "udp", udp.LocalAddr())
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
 	for {
-		// select a random message from an array
-		logger.Info(log.MsgFormat{Msg: messages[rand.Intn(len(messages))], Params: map[string]interface{}{"requestID": uuid.New().String()}})
-		fmt.Println("SEND")
-		time.Sleep(1 * time.Millisecond)
+		select {
+		case err := <-webErrors:
+			cancel()
+			workers.Wait()
+			if errors.Is(err, http.ErrServerClosed) {
+				return nil
+			}
+			return err
+		case <-ctx.Done():
+			shutdown, stop := context.WithTimeout(context.Background(), 5*time.Second)
+			defer stop()
+			err := web.Shutdown(shutdown)
+			workers.Wait()
+			return err
+		case now := <-ticker.C:
+			if err := store.Prune(ctx, now); err != nil {
+				slog.Error("retention pruning failed", "error", err)
+			}
+		}
 	}
 }
