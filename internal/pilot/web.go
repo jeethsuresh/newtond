@@ -1,6 +1,7 @@
 package pilot
 
 import (
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"html/template"
@@ -62,7 +63,7 @@ func Handler(store *Store, auth *Auth) http.Handler {
 			}
 			return
 		}
-		data := pageData{SignedIn: true}
+		data := pageData{SignedIn: true, Filters: r.URL.Query()}
 		now := time.Now().UTC()
 		data.Query, _ = parseQuery(nil, now)
 		query, err := parseQuery(r.URL.Query(), now)
@@ -145,47 +146,23 @@ type pageData struct {
 	SignedIn bool
 	Error    string
 	Query    Query
+	Filters  url.Values
 	Results  []Record
 }
+
+func (d pageData) Kind() string {
+	if kind := d.Filters.Get("kind"); kind != "" {
+		return kind
+	}
+	return d.Query.Kind
+}
+
+//go:embed query.html
+var queryPageHTML string
 
 var page = template.Must(template.New("newtond").Funcs(template.FuncMap{
 	"json": func(data any) string {
 		b, _ := json.MarshalIndent(data, "", "  ")
 		return string(b)
 	},
-}).Parse(`<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>newtonD · Gravitas</title>
-<style>
-:root{font-family:"Instrument Sans",system-ui,sans-serif;color:#172923;background:#f5f6f0;line-height:1.45}
-body{margin:0}main{max-width:68rem;padding:clamp(1rem,4vw,3rem);margin:auto}
-header{border-bottom:1px solid #cbd2c7;padding-bottom:1rem;margin-bottom:1.25rem}
-h1{margin:0;font-size:2.6rem;letter-spacing:-.05em}
-p{max-width:70ch}a{color:#15563f}label{display:grid;gap:.25rem;font-size:.9rem}
-.query{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,13rem),1fr));gap:.7rem;align-items:end}
-input,select,button{padding:.45rem .55rem;border:1px solid #aabbb0;border-radius:4px;background:white;font:inherit;min-width:0}
-button{background:#164b39;color:white;cursor:pointer}
-.actions{display:flex;gap:.6rem;flex-wrap:wrap;margin-top:1rem}
-article{background:white;border:1px solid #cbd2c7;padding:.9rem;margin:.6rem 0;overflow-wrap:anywhere}
-summary{cursor:pointer}pre{overflow:auto;font-size:.85rem}small{color:#405a4d}footer{margin-top:1.2rem}
-</style></head><body><main><header><small>Gravitas</small><h1>newtonD</h1></header>
-{{if .SignedIn}}
-<form method="get" class="query">
-<label>View<select name="kind"><option value="events" {{if eq .Query.Kind "events"}}selected{{end}}>Recent events</option><option value="samples" {{if eq .Query.Kind "samples"}}selected{{end}}>Retained examples</option><option value="counts" {{if eq .Query.Kind "counts"}}selected{{end}}>Daily counts</option></select></label>
-<label>Service<input name="service" placeholder="river" value="{{.Query.Service}}"></label>
-<label>Statement contains<input name="message" value="{{.Query.Message}}"></label>
-<label>Request ID<input name="request_id" value="{{.Query.RequestID}}"></label>
-<label>From (UTC)<input name="from" placeholder="YYYY-MM-DD"></label>
-<label>To (UTC, exclusive)<input name="to" placeholder="YYYY-MM-DD"></label>
-<button>Query logs</button></form>
-<div class="actions"><form method="post" action="/api/v1/token"><button>Create 30-minute agent token</button></form>
-<form method="post" action="/auth/logout"><button>Sign out</button></form></div>
-<p><small>Showing up to {{.Query.Limit}} rows. Counts include events received by newtonD. Older buckets contain one example.</small></p>
-{{if .Error}}<p role="alert">{{.Error}}</p>{{else}}
-{{range .Results}}<article><strong>{{.Message}}</strong> <small>{{.Service}}</small>
-{{if .Bucket}}<p>UTC bucket {{.Bucket}} · {{.Count}} occurrences · {{.Seconds}} seconds</p>{{end}}
-{{if .Bins}}<small>Counts within bucket: {{.Bins}}</small>{{end}}
-{{if .Event}}<details><summary>{{.Event.Timestamp.Format "2006-01-02 15:04:05.000Z"}} · {{.Event.Level}}</summary><pre>{{json .Event.Params}}</pre><small>Event {{.Event.ID}}</small></details>{{end}}
-</article>{{else}}<p>No matching logs.</p>{{end}}{{end}}
-{{else}}<p>Sign in to query Gravitas and River logs.</p><a href="/auth/gravitas/start">Sign in with Gravitas</a>{{end}}
-</main></body></html>`))
+}).Parse(queryPageHTML))
