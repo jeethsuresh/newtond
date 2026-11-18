@@ -148,6 +148,21 @@ func TestGravitasLoginAndRevokedAgent(t *testing.T) {
 	if cookie == nil || !cookie.Secure || !cookie.HttpOnly {
 		t.Fatal("missing secure session cookie")
 	}
+	// A successful query and a rejected edit both retain the entered filters.
+	for _, from := range []string{"2026-01-01", "invalid-date"} {
+		params := url.Values{"kind": {"counts"}, "from": {from}, "limit": {"42"}, "message": {"<test>"}}
+		r = httptest.NewRequest("GET", "/?"+params.Encode(), nil)
+		r.AddCookie(cookie)
+		body := call(r, 200).Body.String()
+		for _, expected := range []string{`value="42"`, `value="` + from + `"`, `value="&lt;test&gt;"`} {
+			if !strings.Contains(body, expected) {
+				t.Errorf("query page did not retain %s", expected)
+			}
+		}
+		if from == "invalid-date" && !strings.Contains(body, `role="alert"`) {
+			t.Error("invalid date was not reported in the results region")
+		}
+	}
 	r = httptest.NewRequest("POST", "/api/v1/token", nil)
 	r.AddCookie(cookie)
 	call(r, 403)

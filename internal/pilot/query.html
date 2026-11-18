@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>newtonD · Gravitas</title>
+<style>
+:root {
+  color-scheme: light;
+  --ink: #172923;
+  --muted: #50645b;
+  --line: #c6d2c8;
+  --accent: #236246;
+  --panel: #fffefa;
+  font: 100% / 1.5 system-ui, sans-serif;
+  color: var(--ink);
+  background: #edf1e9;
+}
+* { box-sizing: border-box; }
+body { margin: 0; }
+main { max-width: 72rem; padding: clamp(1rem, 4vw, 3rem); margin: auto; }
+header, .results-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+header { margin-bottom: 1.5rem; }
+h1, h2, h3, p { margin: 0; }
+h1 { font: 600 clamp(2.35rem, 6vw, 3.8rem) / 1 Georgia, serif; letter-spacing: -.05em; }
+h2 { font: 600 1.75rem / 1.1 Georgia, serif; letter-spacing: -.025em; }
+small, .window { color: var(--muted); }
+.query, .landing { background: var(--panel); border: 1px solid var(--line); border-radius: 1rem; padding: clamp(1rem, 3vw, 1.65rem); }
+.query-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr)); gap: .8rem; align-items: end; }
+label { display: grid; gap: .3rem; color: var(--muted); font-size: .88rem; }
+input, select, button, .primary { min-height: 2.75rem; padding: .45rem .7rem; border: 1px solid #a6b8ab; border-radius: .45rem; color: var(--ink); background: white; font: inherit; min-width: 0; }
+button, summary { cursor: pointer; }
+button, .primary { position: relative; isolation: isolate; }
+.primary { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; color: white; border-color: transparent; font-weight: 650; background: transparent; }
+.primary::before { content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; background: var(--accent); box-shadow: 0 3px 0 #123e31; transition: transform 180ms cubic-bezier(.2,.8,.25,1), box-shadow 180ms ease; }
+.primary:hover::before { background: #194f38; }
+.primary:active::before { transform: translateY(2px) scale(1.025,.91); box-shadow: 0 1px 0 #123e31; transition-duration: 75ms; }
+:focus-visible { outline: 3px solid #99713b; outline-offset: 3px; }
+.actions { display: grid; justify-items: end; }
+.actions[open] { justify-items: start; }
+.actions summary { color: var(--accent); padding: .6rem 0; min-height: 2.75rem; }
+.actions form { margin-bottom: .4rem; }
+.results { margin-block-start: clamp(1.75rem, 4vw, 2.75rem); }
+.results-heading { padding-block-end: .8rem; }
+.window, .retention { font-size: .86rem; margin-bottom: .7rem; }
+.records { background: var(--panel); border: 1px solid var(--line); border-radius: 1rem; overflow: clip; }
+article, .empty { padding: .95rem clamp(.8rem, 2vw, 1.35rem); overflow-wrap: anywhere; }
+article + article { border-top: 1px solid var(--line); }
+article header { margin: 0; gap: .25rem .8rem; color: var(--muted); }
+article h3 { font-size: 1rem; line-height: 1.4; margin-block: .2rem .35rem; }
+time, pre, .window { font-family: ui-monospace, monospace; }
+details details, article details { color: var(--muted); }
+article summary { padding-block: .35rem; }
+article details[open] { background: #edf2eb; margin-top: .6rem; padding: .4rem .75rem; border-radius: .45rem; }
+pre { overflow: auto; font-size: .85rem; }
+.error { color: #862a23; padding: .8rem; border-inline-start: 3px solid currentColor; background: #fceee7; }
+.landing { max-width: 32rem; }
+.landing p { margin-block-end: 1rem; }
+@media (prefers-reduced-motion: reduce) {
+  .primary::before { transition: none; }
+  .primary:active::before { transform: none; background: #143e2d; }
+}
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>newtonD</h1>
+  {{if .SignedIn}}
+    <details class="actions">
+      <summary>Session</summary>
+      <form method="post" action="/api/v1/token"><button>Create 30-minute agent token</button></form>
+      <form method="post" action="/auth/logout"><button>Sign out</button></form>
+    </details>
+  {{end}}
+</header>
+{{if .SignedIn}}
+<form method="get" class="query" aria-label="Log query">
+  <div class="query-fields">
+    <label>View
+      <select name="kind">
+        <option value="events" {{if eq .Kind "events"}}selected{{end}}>Recent events</option>
+        <option value="samples" {{if eq .Kind "samples"}}selected{{end}}>Retained examples</option>
+        <option value="counts" {{if eq .Kind "counts"}}selected{{end}}>Daily counts</option>
+      </select>
+    </label>
+    <label>Service<input name="service" placeholder="river" value="{{.Filters.Get "service"}}"></label>
+    <label>Statement contains<input name="message" value="{{.Filters.Get "message"}}"></label>
+    <label>Request ID<input name="request_id" value="{{.Filters.Get "request_id"}}" aria-describedby="request-help"><small id="request-help">Recent events only</small></label>
+    <label>From (UTC)<input name="from" placeholder="YYYY-MM-DD" value="{{.Filters.Get "from"}}"></label>
+    <label>To (UTC, exclusive)<input name="to" placeholder="YYYY-MM-DD" value="{{.Filters.Get "to"}}"></label>
+    <label>Maximum rows<input name="limit" type="number" min="1" max="500" value="{{or (.Filters.Get "limit") .Query.Limit}}"></label>
+    <button class="primary" type="submit">Query logs</button>
+  </div>
+</form>
+<section class="results" aria-labelledby="results">
+  {{if .Error}}
+    <h2 id="results" class="results-heading">Query results</h2>
+    <p class="error" role="alert">{{.Error}}</p>
+  {{else}}
+    <div class="results-heading">
+      <h2 id="results">{{if eq .Kind "counts"}}Daily counts{{else if eq .Kind "samples"}}Retained examples{{else}}Recent events{{end}}</h2>
+      <small>{{len .Results}} {{if eq (len .Results) 1}}row{{else}}rows{{end}}{{if eq (len .Results) .Query.Limit}} · limit reached{{end}}</small>
+    </div>
+    <p class="window">{{.Query.From.Format "2006-01-02 15:04:05Z"}} → {{.Query.To.Format "2006-01-02 15:04:05Z"}} UTC</p>
+    {{if eq .Kind "counts"}}<p class="retention">Counts include events received by newtonD.</p>{{end}}
+    {{if eq .Kind "samples"}}<p class="retention">Each retained time bucket contains one example.</p>{{end}}
+    <div class="records">
+    {{range .Results}}
+      <article>
+        <header>
+          <small>{{.Service}}{{if .Event}} · {{.Event.Level}}{{end}}</small>
+          {{if .Bucket}}<time>{{.Bucket}}</time>{{else if .Event}}<time datetime="{{.Event.Timestamp.Format "2006-01-02T15:04:05.000Z07:00"}}">{{.Event.Timestamp.Format "2006-01-02 15:04:05.000Z"}}</time>{{end}}
+        </header>
+        <h3>{{.Message}}</h3>
+        {{if .Bucket}}<small>{{.Count}} occurrences · {{.Seconds}} second bucket</small>{{end}}
+        {{if .Bins}}<p><small>Counts within bucket: {{.Bins}}</small></p>{{end}}
+        {{if .Event}}
+          <details>
+            <summary>{{if .Bucket}}Example at {{.Event.Timestamp.Format "15:04:05.000Z"}}{{else}}Event details{{end}}</summary>
+            <pre>{{json .Event.Params}}</pre><small>Event {{.Event.ID}}</small>
+          </details>
+        {{end}}
+      </article>
+    {{else}}<p class="empty">No matching logs.</p>{{end}}
+    </div>
+  {{end}}
+</section>
+{{else}}
+<section class="landing" aria-label="Sign in">
+  <p>Query Gravitas and River logs.</p>
+  <a class="primary" href="/auth/gravitas/start">Sign in with Gravitas</a>
+</section>
+{{end}}
+</main>
+</body>
+</html>
